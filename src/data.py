@@ -108,7 +108,7 @@ def load_toc(toc_path: str) -> TOCStructure:
     return toc
 
 
-def flatten_toc(toc: TOCStructure, parent_path: List[str] = None) -> List[List[str]]:
+def flatten_toc(toc: TOCStructure, parent_path: List[str] = None, leaves_only: bool = True) -> List[List[str]]:
     """Flatten nested TOC into a list of paths.
     
     Each path is a list representing the hierarchy, e.g.:
@@ -117,29 +117,42 @@ def flatten_toc(toc: TOCStructure, parent_path: List[str] = None) -> List[List[s
     Args:
         toc: Nested TOC structure.
         parent_path: Current path in the hierarchy (used for recursion).
+        leaves_only: If True, only return leaf nodes (deepest level).
+            If False, return all paths including intermediate ones.
         
     Returns:
-        List of paths, where each path is a list of titles from root to leaf.
+        List of paths in order of appearance.
     """
     if parent_path is None:
         parent_path = []
     
     paths = []
     
-    for key, value in toc.items():
-        current_path = parent_path + [key]
-        
-        if isinstance(value, list):
-            # Leaf level - list of chapter/section names
-            for item in value:
-                paths.append(current_path + [item])
-        elif isinstance(value, dict):
-            # Nested level - recurse
-            paths.extend(flatten_toc(value, current_path))
-        else:
-            # Single string value
-            paths.append(current_path + [value])
+    def process_item(obj: Any, current_path: List[str]):
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                new_path = current_path + [key]
+                # Check if this is a leaf (empty dict or no nested content)
+                is_leaf = not value or (isinstance(value, list) and len(value) == 0)
+                if is_leaf or not leaves_only:
+                    paths.append(new_path)
+                if value:  # Has children
+                    process_item(value, new_path)
+        elif isinstance(obj, list):
+            if len(obj) == 0:
+                # Empty list means current_path is a leaf
+                if current_path and current_path not in paths:
+                    paths.append(current_path)
+            else:
+                for item in obj:
+                    if isinstance(item, str):
+                        paths.append(current_path + [item])
+                    else:
+                        process_item(item, current_path)
+        elif isinstance(obj, str):
+            paths.append(current_path + [obj])
     
+    process_item(toc, parent_path)
     return paths
 
 
@@ -225,8 +238,8 @@ def assign_chapters_to_pages(
 ) -> List[ParsedPage]:
     """Assign chapter information to parsed pages based on TOC.
     
-    Searches for chapter/section titles in page text and assigns
-    the hierarchical chapter path to each page.
+    Splits pages into consecutive sequences based on chapter titles found in text.
+    Each page belongs to the most recently started chapter.
     
     Args:
         parsed_pages: List of parsed pages.
@@ -235,43 +248,78 @@ def assign_chapters_to_pages(
     Returns:
         List of parsed pages with chapter field filled in.
     """
-    # Flatten TOC to get all paths
+    # Get all paths from TOC in order
     all_paths = flatten_toc(toc)
     
-    # Create a mapping: title -> full path
-    title_to_path = {}
+    # Build mapping: title (last element of path) -> full path
+    title_to_path: Dict[str, List[str]] = {}
     for path in all_paths:
-        # Map each title in the path to the path up to and including it
-        for i, title in enumerate(path):
-            if title not in title_to_path:
-                title_to_path[title] = path[:i + 1]
+        title = path[-1]  # The actual title to search for
+        # If same title appears multiple times, keep the first (most general) one
+        if title not in title_to_path:
+            title_to_path[title] = path
     
-    # Sort paths by depth (deepest first) for more specific matching
-    sorted_paths = sorted(all_paths, key=lambda x: -len(x))
+    # Get all unique titles to search for (preserving TOC order)
+    all_titles = list(title_to_path.keys())
     
-    # Find chapter boundaries
-    # chapter_starts[page_number] = chapter_path
-    chapter_starts: Dict[int, List[str]] = {}
+    # Find chapter starts: scan pages and find where each chapter begins
+    # chapter_starts: list of (page_number, chapter_path) - in TOC order
+    chapter_starts: List[Tuple[int, List[str]]] = []
+    toc_pages: set = set()  # Pages that are likely TOC (many titles found)
     
+    # First pass: detect TOC pages (pages with > 3 titles are likely TOC)
     for page in parsed_pages:
         page_text = page.content
-        
-        # Check each path (from most specific to least)
-        for path in sorted_paths:
-            # Check the last (most specific) title in the path
-            title = path[-1]
-            if find_title_in_text(title, page_text):
-                chapter_starts[page.page_number] = path
-                break  # Found the most specific match
+        titles_on_page = sum(1 for t in all_titles if find_title_in_text(t, page_text))
+        if titles_on_page > 3 and len(toc_pages) < 2:
+            toc_pages.add(page.page_number)
     
-    # Propagate chapters to all pages
-    current_chapter = None
+    if toc_pages:
+        print(f"Detected TOC pages (skipping): {sorted(toc_pages)}")
+    
+    # Second pass: find chapter boundaries in TOC order
+    # For each title in TOC order, find the first page where it appears
+    # Only look at pages after the last found chapter boundary
+    min_page = 0  # Start searching from the beginning
+    not_found_titles: List[str] = []  # Track titles not found in text
+    
+    for title in all_titles:
+        path = title_to_path[title]
+        found = False
+        
+        # Search for this title starting from min_page
+        for page in parsed_pages:
+            if page.page_number < min_page:
+                continue  # Skip pages before last found boundary
+            if page.page_number in toc_pages:
+                continue  # Skip TOC pages
+            
+            if find_title_in_text(title, page.content):
+                chapter_starts.append((page.page_number, path))
+                min_page = page.page_number  # Next chapter must be on this page or later
+                found = True
+                break  # Found this chapter, move to next title
+        
+        if not found:
+            not_found_titles.append(title)
+    
+    # Warn about chapters not found
+    if not_found_titles:
+        print(f"WARNING: {len(not_found_titles)} chapter(s) not found in text:")
+        for title in not_found_titles:
+            print(f"  - {title}")
+    
+    # Assign chapters to pages based on boundaries
     updated_pages = []
+    chapter_idx = 0
+    current_chapter = None
     
     for page in parsed_pages:
-        # Check if new chapter starts on this page
-        if page.page_number in chapter_starts:
-            current_chapter = chapter_starts[page.page_number]
+        # Check if we've reached the next chapter boundary
+        while (chapter_idx < len(chapter_starts) and 
+               chapter_starts[chapter_idx][0] <= page.page_number):
+            current_chapter = chapter_starts[chapter_idx][1]
+            chapter_idx += 1
         
         # Create updated page with chapter info
         updated_page = ParsedPage(
@@ -286,6 +334,12 @@ def assign_chapters_to_pages(
     pages_with_chapters = sum(1 for p in updated_pages if p.chapter)
     chapters_found = len(chapter_starts)
     print(f"Found {chapters_found} chapter boundaries, assigned chapters to {pages_with_chapters}/{len(updated_pages)} pages")
+    
+    # Log found chapters
+    if chapter_starts:
+        print("Chapter boundaries:")
+        for page_num, path in chapter_starts:
+            print(f"  Page {page_num}: {' > '.join(path)}")
     
     return updated_pages
 
