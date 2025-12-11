@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Tuple, Optional
 
 from langchain_community.chat_models import ChatOpenAI
 from langchain.prompts.chat import ChatPromptTemplate
-from langchain.schema import BaseRetriever
+from langchain_community.vectorstores import FAISS
 
 
 
@@ -14,12 +14,12 @@ class BaseRAGChecker(ABC):
 
     def __init__(
         self,
-        retriever: BaseRetriever,
+        faiss_retriever: FAISS,
         model_name: str = "gemma-3-27b-it/latest",
         system_prompt: Optional[str] = None,
-        temperature: float = 0.0,
+        temperature: float = 0.3,
     ):
-        self.retriever = retriever
+        self.retriever = faiss_retriever
         self.model_name = model_name
         self.temperature = temperature
 

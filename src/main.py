@@ -47,10 +47,10 @@ SYSTEM_PROMPT = (
 
 def main():
     index_dir = "data/index"
-    retriever = load_retriever(index_dir)
+    faiss_retriever = load_retriever(index_dir)
 
     checker = RAGEssayChecker(
-        retriever=retriever,
+        faiss_retriever =faiss_retriever,
         system_prompt=SYSTEM_PROMPT
     )
 
