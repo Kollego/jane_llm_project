@@ -1,5 +1,5 @@
 from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
-from base_rag import BaseRAGChecker
+from .base_rag import BaseRAGChecker
 
 
 class RAGEssayChecker(BaseRAGChecker):

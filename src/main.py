@@ -1,9 +1,9 @@
 import openai
-
-from retriever import load_retriever
-from essay_checker import RAGEssayChecker
-from dotenv import load_dotenv
 import os
+
+from dotenv import load_dotenv
+from .retriever import load_retriever
+from .essay_checker import RAGEssayChecker
 
 # ========= YC OpenAI-compatible client =========
 load_dotenv()
