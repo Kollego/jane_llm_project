@@ -24,6 +24,15 @@ from .data import (
     assign_chapters_to_pages,
 )
 
+# Embeddings
+from .embedder import YCEmbedder
+
+# LLM
+from .yandex_llm import YandexCloudModel
+
+# Qdrant
+from .qdrant_manager import QdrantManager, QdrantConfig, SearchResult
+
 # RAG components
 from .base_rag import BaseRAGChecker
 from .essay_checker import RAGEssayChecker
@@ -44,6 +53,14 @@ __all__ = [
     "process_book",
     "process_books_directory",
     "assign_chapters_to_pages",
+    # Embeddings
+    "YCEmbedder",
+    # LLM
+    "YandexCloudModel",
+    # Qdrant
+    "QdrantManager",
+    "QdrantConfig",
+    "SearchResult",
     # RAG
     "BaseRAGChecker",
     "RAGEssayChecker",

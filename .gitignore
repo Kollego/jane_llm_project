@@ -21,6 +21,7 @@ env/
 .DS_Store
 
 # Project specific
+data/*
 data/parsed/
 data/books/
 data/summary_of_books
@@ -37,3 +38,5 @@ build/
 # Files
 *.jpg
 *.json
+*.txt
+!requirements.txt

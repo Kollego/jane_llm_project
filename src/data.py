@@ -51,14 +51,13 @@ class ChunkConfig:
     Attributes:
         child_chunk_size: Size of child chunks in characters (for vector search).
         child_chunk_overlap: Overlap between child chunks.
-        parent_chunk_size: Size of parent chunks in characters (for context).
-        parent_chunk_overlap: Overlap between parent chunks.
         language: Language of the documents (for better parsing).
+    
+    Note:
+        Parent chunks are full chapters (not split by size).
     """
-    child_chunk_size: int = 400
-    child_chunk_overlap: int = 50
-    parent_chunk_size: int = 2000
-    parent_chunk_overlap: int = 200
+    child_chunk_size: int = 800
+    child_chunk_overlap: int = 100
     language: str = "ru"
 
 
@@ -711,7 +710,7 @@ def process_book(
         >>> parse_and_save("data/books/book.pdf", "data/cache/book_parsed.json")
         >>> 
         >>> # Then process the parsed data
-        >>> config = ChunkConfig(child_chunk_size=400, parent_chunk_size=2000)
+        >>> config = ChunkConfig(child_chunk_size=400)
         >>> child_docs, parent_docs = process_book(
         ...     "data/books/book.pdf",
         ...     "data/cache/book_parsed.json",
