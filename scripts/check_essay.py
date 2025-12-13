@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.embedder import YCEmbedder
 from src.qdrant_manager import QdrantManager, QdrantConfig
 from src.essay_checker import RAGEssayChecker
+from src.parent_retriever import ParentDocumentRetriever, load_parent_chunks
 
 
 # Default paths
@@ -36,84 +37,6 @@ DEFAULT_QDRANT_PATH = "./data/qdrant_local"
 DEFAULT_COLLECTION_NAME = "chunks"
 DEFAULT_PARENT_CHUNKS_DIR = "./data/chunks"
 DEFAULT_MODEL = "gemma-3-27b-it/latest"
-
-
-class ParentDocumentRetriever:
-    """
-    Retriever that searches child chunks and returns parent chunks.
-    
-    Implements the retrieve(query, top_k) interface expected by BaseRAGChecker.
-    """
-    
-    def __init__(
-        self,
-        embedder: YCEmbedder,
-        manager: QdrantManager,
-        parent_index: Dict[str, Dict[str, Any]],
-    ):
-        self.embedder = embedder
-        self.manager = manager
-        self.parent_index = parent_index
-    
-    def retrieve(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
-        """
-        Search child chunks and return corresponding parent chunks.
-        
-        Returns:
-            List of dicts with 'text' and 'metadata' keys
-        """
-        # Get query embedding
-        query_vector = self.embedder.embed_query(query)
-        
-        # Search child chunks (get more to deduplicate)
-        results = self.manager.search(query_vector=query_vector, k=top_k * 3)
-        
-        # Collect unique parent chunks
-        seen_parent_ids = set()
-        parent_chunks = []
-        
-        for result in results:
-            parent_id = result.metadata.get("parent_id")
-            
-            if not parent_id or parent_id in seen_parent_ids:
-                continue
-            
-            seen_parent_ids.add(parent_id)
-            parent = self.parent_index.get(parent_id)
-            
-            if parent:
-                parent_chunks.append({
-                    "text": parent["text"],
-                    "metadata": parent["metadata"],
-                    "score": result.score,
-                })
-            
-            if len(parent_chunks) >= top_k:
-                break
-        
-        return parent_chunks
-
-
-def load_parent_chunks(parent_dir: str) -> Dict[str, Dict[str, Any]]:
-    """Load all parent chunks and index by parent_id."""
-    parent_path = Path(parent_dir)
-    
-    if not parent_path.exists():
-        return {}
-    
-    parent_files = list(parent_path.glob("*_parent.json"))
-    parent_index = {}
-    
-    for file_path in parent_files:
-        with open(file_path, "r", encoding="utf-8") as f:
-            chunks = json.load(f)
-        
-        for chunk in chunks:
-            parent_id = chunk["metadata"].get("chunk_id")
-            if parent_id:
-                parent_index[parent_id] = chunk
-    
-    return parent_index
 
 
 def print_sources(chunks: List[Dict[str, Any]]):

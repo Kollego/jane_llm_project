@@ -37,6 +37,7 @@ from .qdrant_manager import QdrantManager, QdrantConfig, SearchResult
 from .base_rag import BaseRAGChecker
 from .essay_checker import RAGEssayChecker
 from .retriever import load_retriever
+from .parent_retriever import ParentDocumentRetriever, load_parent_chunks
 
 __all__ = [
     # Data processing
@@ -65,4 +66,6 @@ __all__ = [
     "BaseRAGChecker",
     "RAGEssayChecker",
     "load_retriever",
+    "ParentDocumentRetriever",
+    "load_parent_chunks",
 ]
