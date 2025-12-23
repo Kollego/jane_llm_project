@@ -1,7 +1,8 @@
 """
 Yandex Cloud LLM client.
 
-Provides LangChain-compatible interface for Yandex Cloud Foundation Models.
+Provides LangChain-compatible interface for Yandex Cloud AI Studio models
+using OpenAI-compatible API.
 """
 
 import json
@@ -31,7 +32,7 @@ class YandexCloudModel:
     """
     Yandex Cloud LLM client with LangChain-compatible interface.
     
-    Uses direct HTTP requests to Yandex Cloud API.
+    Uses OpenAI-compatible API for Yandex Cloud AI Studio models.
     
     Environment variables:
         YC_API_KEY: API key for Yandex Cloud
@@ -46,6 +47,9 @@ class YandexCloudModel:
         >>> print(response.content)
     """
     
+    # OpenAI-compatible endpoint for Yandex Cloud AI Studio
+    OPENAI_COMPATIBLE_ENDPOINT = "https://llm.api.cloud.yandex.net/v1/chat/completions"
+    
     def __init__(
         self,
         model: str = "gemma-3-27b-it/latest",
@@ -53,7 +57,7 @@ class YandexCloudModel:
         folder_id: Optional[str] = None,
         temperature: float = 0.3,
         max_tokens: int = 2000,
-        endpoint: str = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion",
+        endpoint: Optional[str] = None,
         max_retries: int = 3,
         retry_base_delay: float = 1.0,
         retry_max_delay: float = 30.0,
@@ -68,7 +72,7 @@ class YandexCloudModel:
             folder_id: Yandex Cloud folder ID (or set YC_FOLDER_ID env var)
             temperature: Generation temperature
             max_tokens: Maximum tokens in response
-            endpoint: API endpoint URL
+            endpoint: API endpoint URL (defaults to OpenAI-compatible endpoint)
             max_retries: Max retry attempts
             retry_base_delay: Base delay for retries (seconds)
             retry_max_delay: Max delay for retries (seconds)
@@ -79,7 +83,7 @@ class YandexCloudModel:
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.endpoint = endpoint
+        self.endpoint = endpoint or self.OPENAI_COMPATIBLE_ENDPOINT
         self.max_retries = max_retries
         self.retry_base_delay = retry_base_delay
         self.retry_max_delay = retry_max_delay
@@ -96,11 +100,11 @@ class YandexCloudModel:
     
     @property
     def model_uri(self) -> str:
-        """Get full model URI."""
+        """Get full model URI for Yandex Cloud."""
         return f"gpt://{self.folder_id}/{self.model}"
     
     def _headers(self) -> Dict[str, str]:
-        """Create request headers."""
+        """Create request headers for OpenAI-compatible API."""
         return {
             "Content-Type": "application/json",
             "Authorization": f"Api-Key {self.api_key}",
@@ -121,16 +125,16 @@ class YandexCloudModel:
         return any(keyword in message.lower() for keyword in transient_keywords)
     
     def _format_messages(self, messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
-        """Format messages for Yandex API."""
+        """Format messages for OpenAI-compatible API."""
         formatted = []
         for msg in messages:
             role = msg.get("role", "user")
-            # Yandex uses "assistant" not "ai"
+            # Normalize role names
             if role == "ai":
                 role = "assistant"
             formatted.append({
                 "role": role,
-                "text": msg.get("content", msg.get("text", "")),
+                "content": msg.get("content", msg.get("text", "")),
             })
         return formatted
     
@@ -175,15 +179,12 @@ class YandexCloudModel:
         temperature = kwargs.get("temperature", self.temperature)
         max_tokens = kwargs.get("max_tokens", self.max_tokens)
         
-        # Build request payload
+        # Build OpenAI-compatible request payload
         payload = {
-            "modelUri": self.model_uri,
-            "completionOptions": {
-                "stream": False,
-                "temperature": temperature,
-                "maxTokens": str(max_tokens),
-            },
+            "model": self.model_uri,
             "messages": self._format_messages(formatted_messages),
+            "temperature": temperature,
+            "max_tokens": max_tokens,
         }
         
         last_error = None
@@ -193,7 +194,7 @@ class YandexCloudModel:
                 response = requests.post(
                     self.endpoint,
                     headers=self._headers(),
-                    data=json.dumps(payload),
+                    json=payload,
                     timeout=self.timeout,
                 )
                 
@@ -212,15 +213,11 @@ class YandexCloudModel:
                 
                 data = response.json()
                 
-                # Extract content from response
+                # Extract content from OpenAI-compatible response
                 content = ""
-                if "result" in data:
-                    result = data["result"]
-                    if "alternatives" in result and result["alternatives"]:
-                        message = result["alternatives"][0].get("message", {})
-                        content = message.get("text", "")
-                    elif "message" in result:
-                        content = result["message"].get("text", "")
+                if "choices" in data and data["choices"]:
+                    message = data["choices"][0].get("message", {})
+                    content = message.get("content", "")
                 
                 return AIMessage(content=content)
                 
