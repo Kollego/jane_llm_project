@@ -42,7 +42,7 @@ class ParentDocumentRetriever:
     """
     Retriever that searches child chunks and returns parent chunks.
     
-    Implements the retrieve(query, top_k) interface expected by BaseRAGChecker.
+    Implements the retrieve (query, top_k) interface expected by BaseRAGChecker.
     """
     
     def __init__(
