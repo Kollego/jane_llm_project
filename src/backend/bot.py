@@ -28,12 +28,14 @@ logger = logging.getLogger(__name__)
 # Состояния разговора
 (
     MAIN_MENU, 
+    WAITING_ASSIGNMENT,  # Ожидание задания от преподавателя (для эссе)
+    WAITING_ESSAY,  # Ожидание эссе
+    WAITING_NIR,  # Ожидание НИР
     WAITING_NIR_QUERY,  # Ожидание запроса для НИР
-    WAITING_WORK,  # Общее состояние для эссе/НИР
     IN_DIALOG,  # Диалоговый режим
     WAITING_RATING, 
     WAITING_COMMENT
-) = range(6)
+) = range(8)
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 BACKEND_URL = os.getenv('BACKEND_URL', 'http://localhost:5001')
@@ -211,12 +213,13 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         reply_markup = ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True)
         
         await update.message.reply_text(
-            "📤 <b>Отправьте ваше эссе</b>\n\n"
-            "Поддерживаемые форматы: .txt, .docx",
+            "📋 <b>Шаг 1 из 2: Задание от преподавателя</b>\n\n"
+            "Отправьте файл с заданием (.txt или .docx)\n\n"
+            "<i>Это поможет оценить эссе по критериям преподавателя.</i>",
             reply_markup=reply_markup,
             parse_mode=ParseMode.HTML
         )
-        return WAITING_WORK
+        return WAITING_ASSIGNMENT
 
     elif text == BTN_CHECK_NIR:
         context.user_data['work_type'] = 'nir'
@@ -241,7 +244,7 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             reply_markup=reply_markup,
             parse_mode=ParseMode.HTML
         )
-        return WAITING_WORK
+        return WAITING_NIR
 
     elif text == BTN_RATE_BOT:
         rating_keyboard = [['1', '2', '3', '4', '5'], [BTN_CANCEL]]
@@ -263,6 +266,185 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return MAIN_MENU
 
 
+async def handle_assignment_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обрабатывает загрузку задания от преподавателя для эссе."""
+    user_id = update.message.from_user.id
+    
+    if not update.message.document:
+        await update.message.reply_text("Пожалуйста, отправьте файл с заданием (.txt или .docx).")
+        return WAITING_ASSIGNMENT
+
+    if not (update.message.document.file_name.endswith('.txt') or 
+            update.message.document.file_name.endswith('.docx')):
+        await update.message.reply_text("Неверный формат файла. Поддерживаются только .txt и .docx.")
+        return WAITING_ASSIGNMENT
+
+    try:
+        file = await update.message.document.get_file()
+        file_bytes = await file.download_as_bytearray()
+        file_name = update.message.document.file_name
+        
+        # Отправляем задание на backend
+        files = {'file': (file_name, file_bytes)}
+        data = {'user_id': str(user_id), 'work_type': 'essay'}
+        
+        response = requests.post(
+            f"{BACKEND_URL}/assignment",
+            files=files,
+            data=data,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            cancel_keyboard = [[BTN_CANCEL]]
+            reply_markup = ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True)
+            
+            await update.message.reply_text(
+                f"✅ Задание получено: <b>{file_name}</b>\n\n"
+                "📤 <b>Шаг 2 из 2: Отправьте ваше эссе</b>\n\n"
+                "Поддерживаемые форматы: .txt, .docx",
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.HTML
+            )
+            return WAITING_ESSAY
+        else:
+            await update.message.reply_text("❌ Ошибка при сохранении задания. Попробуйте ещё раз.")
+            return WAITING_ASSIGNMENT
+            
+    except Exception as e:
+        logger.error(f"Error uploading assignment: {e}")
+        await update.message.reply_text("❌ Произошла ошибка. Попробуйте ещё раз.")
+        return WAITING_ASSIGNMENT
+
+
+async def handle_essay_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обрабатывает загрузку эссе и возвращает обратную связь."""
+    user_id = update.message.from_user.id
+
+    if not update.message.document:
+        await update.message.reply_text("Пожалуйста, отправьте файл (.txt или .docx).")
+        return WAITING_ESSAY
+
+    if not (update.message.document.file_name.endswith('.txt') or 
+            update.message.document.file_name.endswith('.docx')):
+        await update.message.reply_text("Неверный формат файла. Поддерживаются только .txt и .docx.")
+        return WAITING_ESSAY
+
+    try:
+        file = await update.message.document.get_file()
+        file_bytes = await file.download_as_bytearray()
+        file_name = update.message.document.file_name
+
+        files = {'file': (file_name, file_bytes)}
+        data = {'user_id': str(user_id), 'top_k': '5'}
+
+        await update.message.reply_text("⏳ Анализирую ваше эссе...")
+        
+        response = requests.post(
+            f"{BACKEND_URL}/analyze/essay",
+            files=files,
+            data=data,
+            timeout=180
+        )
+
+        if response.status_code == 200:
+            response_data = response.json()
+            recommendation = response_data.get('recommendation', '')
+
+            # Для эссе - возвращаемся в главное меню
+            keyboard = get_main_menu_keyboard()
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+            recommendation_html = md_bold_to_html(recommendation)
+            parts = split_text_for_telegram(recommendation_html, max_len=4096)
+            
+            if parts:
+                for part in parts[:-1]:
+                    await update.message.reply_text(part, parse_mode=ParseMode.HTML)
+                await update.message.reply_text(
+                    parts[-1] + "\n\n✅ Анализ завершён. Вы можете проверить другую работу.",
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                await update.message.reply_text(
+                    "Анализ завершён.",
+                    reply_markup=reply_markup
+                )
+
+            record_daily_use(user_id)
+            return MAIN_MENU
+
+        else:
+            try:
+                error_data = response.json()
+                error_type = error_data.get('error')
+                
+                error_messages = {
+                    'invalid_docx': "❌ Загруженный DOCX файл поврежден.",
+                    'unsupported_format': "❌ Неподдерживаемый формат файла.",
+                    'processing_error': "❌ Ошибка при обработке файла.",
+                }
+                
+                message = error_messages.get(error_type, "❌ Ошибка при обработке файла.")
+                await update.message.reply_text(message)
+            except:
+                await update.message.reply_text("❌ Ошибка при обработке файла. Попробуйте ещё раз.")
+            
+            return WAITING_ESSAY
+
+    except requests.exceptions.Timeout:
+        await update.message.reply_text("⏰ Превышено время ожидания. Попробуйте ещё раз.")
+        return WAITING_ESSAY
+    except Exception as e:
+        logger.error(f"Error processing essay: {e}")
+        await update.message.reply_text("❌ Произошла ошибка. Попробуйте ещё раз.")
+        return WAITING_ESSAY
+
+
+async def handle_nir_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обрабатывает загрузку НИР и переходит к вопросу."""
+    user_id = update.message.from_user.id
+
+    if not update.message.document:
+        await update.message.reply_text("Пожалуйста, отправьте файл (.txt или .docx).")
+        return WAITING_NIR
+
+    if not (update.message.document.file_name.endswith('.txt') or 
+            update.message.document.file_name.endswith('.docx')):
+        await update.message.reply_text("Неверный формат файла. Поддерживаются только .txt и .docx.")
+        return WAITING_NIR
+
+    try:
+        file = await update.message.document.get_file()
+        file_bytes = await file.download_as_bytearray()
+        file_name = update.message.document.file_name
+
+        # Сохраняем файл для последующего анализа
+        context.user_data['nir_file_bytes'] = file_bytes
+        context.user_data['nir_file_name'] = file_name
+        
+        cancel_keyboard = [[BTN_CANCEL]]
+        reply_markup = ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(
+            f"✅ Файл <b>{file_name}</b> получен!\n\n"
+            "📝 <b>На что обратить внимание?</b>\n\n"
+            "Напишите, что именно вы хотите проверить или улучшить.\n\n"
+            "<i>Примеры:</i>\n"
+            "• Проверь логику аргументации\n"
+            "• Какие источники добавить?\n"
+            "• Как улучшить введение?\n"
+            "• Соответствует ли текст теме?",
+            reply_markup=reply_markup,
+            parse_mode='HTML'
+        )
+        return WAITING_NIR_QUERY
+        
+    except Exception as e:
+        logger.error(f"Error receiving NIR file: {e}")
+        await update.message.reply_text("❌ Произошла ошибка. Попробуйте ещё раз.")
+        return WAITING_NIR
 
 
 async def handle_nir_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -368,148 +550,6 @@ async def handle_nir_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         logger.error(f"Error processing NIR: {e}")
         await update.message.reply_text("❌ Произошла ошибка. Попробуйте ещё раз.")
         return WAITING_NIR_QUERY
-
-
-async def handle_work_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обрабатывает загрузку работы для анализа."""
-    user_id = update.message.from_user.id
-    work_type = context.user_data.get('work_type', 'essay')
-    work_type_name = context.user_data.get('work_type_name', 'эссе')
-
-    # Проверка лимита
-    if not has_daily_quota(user_id):
-        keyboard = get_main_menu_keyboard()
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        await update.message.reply_text(
-            "⚠️ Лимит: не более 3 проверок в день. Попробуйте завтра.",
-            reply_markup=reply_markup
-        )
-        return MAIN_MENU
-
-    if not update.message.document:
-        await update.message.reply_text("Пожалуйста, отправьте файл (.txt или .docx).")
-        return WAITING_WORK
-
-    if not (update.message.document.file_name.endswith('.txt') or 
-            update.message.document.file_name.endswith('.docx')):
-        await update.message.reply_text("Неверный формат файла. Поддерживаются только .txt и .docx.")
-        return WAITING_WORK
-
-    try:
-        file = await update.message.document.get_file()
-        file_bytes = await file.download_as_bytearray()
-        file_name = update.message.document.file_name
-
-        # Для НИР: сохраняем файл и спрашиваем вопрос
-        if work_type == 'nir' and not context.user_data.get('nir_file_ready'):
-            context.user_data['nir_file_bytes'] = file_bytes
-            context.user_data['nir_file_name'] = file_name
-            context.user_data['nir_file_ready'] = True
-            
-            cancel_keyboard = [[BTN_CANCEL]]
-            reply_markup = ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True)
-            await update.message.reply_text(
-                f"✅ Файл <b>{file_name}</b> получен!\n\n"
-                "📝 <b>На что обратить внимание?</b>\n\n"
-                "Напишите, что именно вы хотите проверить или улучшить.\n\n"
-                "<i>Примеры:</i>\n"
-                "• Проверь логику аргументации\n"
-                "• Достаточно ли источников?\n"
-                "• Как улучшить введение?\n"
-                "• Соответствует ли текст теме?",
-                reply_markup=reply_markup,
-                parse_mode='HTML'
-            )
-            return WAITING_NIR_QUERY
-
-        files = {'file': (file_name, file_bytes)}
-        
-        # Добавляем запрос пользователя если есть (для НИР)
-        user_query = context.user_data.get('user_query', '')
-        data = {'user_id': str(user_id), 'top_k': '5', 'user_query': user_query}
-
-        await update.message.reply_text(f"⏳ Анализирую ваше {work_type_name}...")
-        
-        # Выбираем эндпоинт в зависимости от типа работы
-        endpoint = f"{BACKEND_URL}/analyze/{work_type}"
-        response = requests.post(endpoint, files=files, data=data, timeout=180)
-
-        if response.status_code == 200:
-            response_data = response.json()
-            recommendation = response_data.get('recommendation', '')
-
-            keyboard = get_dialog_keyboard()
-            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
-            recommendation_html = md_bold_to_html(recommendation)
-            parts = split_text_for_telegram(recommendation_html, max_len=4096)
-            
-            if parts:
-                for part in parts[:-1]:
-                    await update.message.reply_text(part, parse_mode=ParseMode.HTML)
-                await update.message.reply_text(
-                    parts[-1] + "\n\n💬 Вы можете задать дополнительные вопросы или завершить диалог.",
-                    reply_markup=reply_markup,
-                    parse_mode=ParseMode.HTML
-                )
-            else:
-                await update.message.reply_text(
-                    "Анализ завершен. Вы можете задать вопросы.",
-                    reply_markup=reply_markup
-                )
-
-            # Начинаем диалоговую сессию
-            try:
-                # Для диалога отправляем файл на сервер
-                dialog_resp = requests.post(
-                    f"{BACKEND_URL}/dialog/start",
-                    files={'file': (file_name, file_bytes)},
-                    data={
-                        'user_id': str(user_id),
-                        'work_type': work_type,
-                        'user_query': user_query,
-                    },
-                    timeout=60
-                )
-                
-                if dialog_resp.status_code == 200:
-                    session_data = dialog_resp.json()
-                    context.user_data['session_id'] = session_data.get('session_id')
-                    logger.info(f"Dialog session created: {session_data.get('session_id')}")
-                else:
-                    logger.warning(f"Failed to create dialog session: {dialog_resp.status_code} {dialog_resp.text}")
-            except Exception as e:
-                logger.warning(f"Failed to start dialog session: {e}")
-
-            record_daily_use(user_id)
-            return IN_DIALOG
-
-        else:
-            # Обработка ошибок
-            try:
-                error_data = response.json()
-                error_type = error_data.get('error')
-                
-                error_messages = {
-                    'no_assignment': f"⚠️ Сначала загрузите задание для {work_type_name}.",
-                    'invalid_docx': "❌ Загруженный DOCX файл поврежден.",
-                    'unsupported_format': "❌ Неподдерживаемый формат файла.",
-                }
-                
-                message = error_messages.get(error_type, "❌ Ошибка при обработке файла.")
-                await update.message.reply_text(message)
-            except:
-                await update.message.reply_text("❌ Ошибка при обработке файла. Попробуйте ещё раз.")
-            
-            return WAITING_WORK
-
-    except requests.exceptions.Timeout:
-        await update.message.reply_text("⏰ Превышено время ожидания. Попробуйте ещё раз.")
-        return WAITING_WORK
-    except Exception as e:
-        logger.error(f"Error processing document: {e}")
-        await update.message.reply_text("❌ Произошла ошибка. Попробуйте ещё раз.")
-        return WAITING_WORK
 
 
 async def handle_dialog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -754,15 +794,25 @@ def main() -> None:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu),
                 MessageHandler(filters.Document.ALL, handle_incorrect_action),
             ],
+            WAITING_ASSIGNMENT: [
+                MessageHandler(filters.Document.ALL, handle_assignment_document),
+                MessageHandler(filters.Regex(f'^{re.escape(BTN_CANCEL)}$'), cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_incorrect_action),
+            ],
+            WAITING_ESSAY: [
+                MessageHandler(filters.Document.ALL, handle_essay_document),
+                MessageHandler(filters.Regex(f'^{re.escape(BTN_CANCEL)}$'), cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_incorrect_action),
+            ],
+            WAITING_NIR: [
+                MessageHandler(filters.Document.ALL, handle_nir_document),
+                MessageHandler(filters.Regex(f'^{re.escape(BTN_CANCEL)}$'), cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_incorrect_action),
+            ],
             WAITING_NIR_QUERY: [
                 MessageHandler(filters.Regex(f'^{re.escape(BTN_CANCEL)}$'), cancel),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_nir_query),
                 MessageHandler(filters.Document.ALL, handle_incorrect_action),
-            ],
-            WAITING_WORK: [
-                MessageHandler(filters.Document.ALL, handle_work_document),
-                MessageHandler(filters.Regex(f'^{re.escape(BTN_CANCEL)}$'), cancel),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_incorrect_action),
             ],
             IN_DIALOG: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_dialog),
