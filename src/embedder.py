@@ -282,7 +282,7 @@ class YCEmbedder:
             if len(text) > self.max_chars:
                 vec = self._embed_long_text(text, model_uri)
             else:
-            vec = self._post_text(model_uri, text)
+                vec = self._post_text(model_uri, text)
             vectors.append(vec)
         
         arr = np.array(vectors, dtype=np.float32)
