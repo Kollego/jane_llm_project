@@ -16,6 +16,9 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+# Примерный лимит символов (2048 токенов ≈ 6000 символов для русского текста)
+MAX_CHARS_PER_REQUEST = 5000
+
 
 class YCEmbedder:
     """
@@ -50,6 +53,7 @@ class YCEmbedder:
         timeout: int = 30,
         requests_per_second: float = 8.0,  # YC limit is 10 RPS, use 8 for safety
         max_retries: int = 5,
+        max_chars: int = MAX_CHARS_PER_REQUEST,
     ) -> None:
         """Initialize the embedder.
         
@@ -62,6 +66,7 @@ class YCEmbedder:
             timeout: Request timeout in seconds
             requests_per_second: Rate limit (default 8, YC allows 10)
             max_retries: Max retries on rate limit errors
+            max_chars: Maximum characters per embedding request
         """
         self.api_key = api_key or os.getenv("YC_API_KEY")
         self.iam_token = iam_token or os.getenv("YC_IAM_TOKEN")
@@ -71,6 +76,7 @@ class YCEmbedder:
         self.timeout = timeout
         self.requests_per_second = requests_per_second
         self.max_retries = max_retries
+        self.max_chars = max_chars
         self._min_interval = 1.0 / requests_per_second
         self._last_request_time = 0.0
         
@@ -101,6 +107,52 @@ class YCEmbedder:
         if elapsed < self._min_interval:
             time.sleep(self._min_interval - elapsed)
         self._last_request_time = time.time()
+
+    def _chunk_text(self, text: str, chunk_size: int = None, overlap: int = 500) -> List[str]:
+        """
+        Разбивает текст на чанки с перекрытием.
+        
+        Args:
+            text: Текст для разбиения
+            chunk_size: Размер чанка в символах (по умолчанию self.max_chars)
+            overlap: Размер перекрытия между чанками
+            
+        Returns:
+            Список чанков
+        """
+        if chunk_size is None:
+            chunk_size = self.max_chars
+            
+        if len(text) <= chunk_size:
+            return [text]
+        
+        chunks = []
+        start = 0
+        
+        while start < len(text):
+            end = start + chunk_size
+            
+            # Пытаемся разорвать по границе предложения или абзаца
+            if end < len(text):
+                # Ищем конец предложения
+                for sep in ['\n\n', '\n', '. ', '! ', '? ', '; ']:
+                    pos = text.rfind(sep, start + chunk_size // 2, end)
+                    if pos != -1:
+                        end = pos + len(sep)
+                        break
+            
+            chunk = text[start:end].strip()
+            if chunk:
+                chunks.append(chunk)
+            
+            # Следующий чанк начинается с перекрытием
+            start = end - overlap
+            if start < 0:
+                start = 0
+            if start >= len(text):
+                break
+                
+        return chunks
 
     def _post_text(self, model_uri: str, text: str) -> List[float]:
         """
@@ -163,6 +215,39 @@ class YCEmbedder:
         
         raise RuntimeError("Max retries exceeded")
 
+    def _embed_long_text(self, text: str, model_uri: str) -> List[float]:
+        """
+        Эмбеддинг длинного текста через чанкинг и усреднение.
+        
+        Args:
+            text: Длинный текст
+            model_uri: URI модели
+            
+        Returns:
+            Усредненный вектор эмбеддинга
+        """
+        chunks = self._chunk_text(text)
+        
+        if len(chunks) == 1:
+            return self._post_text(model_uri, chunks[0])
+        
+        # Получаем эмбеддинги для всех чанков
+        embeddings = []
+        for chunk in chunks:
+            vec = self._post_text(model_uri, chunk)
+            embeddings.append(vec)
+        
+        # Усредняем эмбеддинги
+        arr = np.array(embeddings, dtype=np.float32)
+        mean_vec = np.mean(arr, axis=0)
+        
+        # Нормализуем результат
+        norm = np.linalg.norm(mean_vec)
+        if norm > 0:
+            mean_vec = mean_vec / norm
+        
+        return mean_vec.tolist()
+
     def embed_texts(
         self,
         texts: List[str],
@@ -194,6 +279,9 @@ class YCEmbedder:
                 pass
         
         for text in iterator:
+            if len(text) > self.max_chars:
+                vec = self._embed_long_text(text, model_uri)
+            else:
             vec = self._post_text(model_uri, text)
             vectors.append(vec)
         
@@ -209,6 +297,7 @@ class YCEmbedder:
         Embed a single query.
         
         Uses "text-search-query" variant for better search results.
+        Automatically handles long queries via chunking.
         
         Args:
             query: Query text
@@ -217,6 +306,10 @@ class YCEmbedder:
             Embedding vector as list of floats
         """
         model_uri = f"emb://{self.folder_id}/text-search-query/latest"
+        
+        if len(query) > self.max_chars:
+            return self._embed_long_text(query, model_uri)
+        
         return self._post_text(model_uri, query)
 
     def embed_document(self, text: str) -> List[float]:
@@ -224,6 +317,7 @@ class YCEmbedder:
         Embed a single document.
         
         Uses "text-search-doc" variant.
+        Automatically handles long documents via chunking.
         
         Args:
             text: Document text
@@ -232,5 +326,8 @@ class YCEmbedder:
             Embedding vector as list of floats
         """
         model_uri = f"emb://{self.folder_id}/text-search-doc/latest"
+        
+        if len(text) > self.max_chars:
+            return self._embed_long_text(text, model_uri)
+        
         return self._post_text(model_uri, text)
-

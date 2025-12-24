@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  backend:
+    build: .
+    container_name: jane_backend
+    command: python -m src.backend.backend
+    ports:
+      - "5001:5001"
+    environment:
+      - DATA_DIR=/app/data
+      - QDRANT_PATH=/app/data/qdrant_local
+      - PARENT_CHUNKS_DIR=/app/data/chunks
+      - YC_API_KEY=${YC_API_KEY}
+      - YC_FOLDER_ID=${YC_FOLDER_ID}
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  bot:
+    build: .
+    container_name: jane_bot
+    command: python -m src.backend.bot
+    environment:
+      - DATA_DIR=/app/data
+      - BOT_TOKEN=${BOT_TOKEN}
+      - BACKEND_URL=http://backend:5001
+      - YC_API_KEY=${YC_API_KEY}
+      - YC_FOLDER_ID=${YC_FOLDER_ID}
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - backend
+    restart: unless-stopped
+

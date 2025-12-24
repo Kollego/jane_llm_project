@@ -1,0 +1,41 @@
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.cursor/
+
+# Git
+.git/
+.gitignore
+
+# Experiments and notebooks
+exp/
+*.ipynb
+
+# Temporary files
+*.log
+*.tmp
+
+# Mac
+.DS_Store
+
+# Data that shouldn't be in image (mounted as volume)
+# Uncomment if you want to exclude data from build:
+# data/books/
+# data/cache/
+# data/uploads/
+# data/usage/
+# data/feedback/
+

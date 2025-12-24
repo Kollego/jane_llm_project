@@ -7,30 +7,96 @@
 
 «Джейн» мотивирует студентов и упрощает работу преподавателей, выступая в роли умного тьютора с выдержанным стилем общения.
 
-## Установка
+---
+
+## Быстрый старт с Docker
+
+### 1. Создайте `.env` файл
 
 ```bash
+BOT_TOKEN=ваш_telegram_bot_token
+YC_API_KEY=ваш_yandex_cloud_api_key
+YC_FOLDER_ID=ваш_yandex_folder_id
+```
+
+### 2. Запустите через Docker Compose
+
+```bash
+# Сборка и запуск
+docker-compose up -d --build
+
+# Просмотр логов
+docker-compose logs -f
+
+# Логи только бота
+docker-compose logs -f bot
+
+# Остановка
+docker-compose down
+```
+
+### 3. Убедитесь, что папка `data/` содержит:
+- `qdrant_local/` — векторная база данных
+- `chunks/` — parent chunks для retriever
+
+---
+
+## Локальная установка
+
+```bash
+# Создание виртуального окружения
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# или: venv\Scripts\activate  # Windows
+
+# Установка зависимостей
 pip install -r requirements.txt
 ```
 
 Создайте файл `.env` в корне проекта:
-```
+```bash
 LLAMA_CLOUD_API_KEY=your_llamaparse_key
 MISTRAL_API_KEY=your_mistral_key
+YC_API_KEY=your_yandex_api_key
+YC_FOLDER_ID=your_folder_id
+BOT_TOKEN=your_telegram_bot_token
 ```
 
-## RAG Pipeline для книг по урбанистике
+### Запуск локально
+
+```bash
+# Терминал 1: Backend
+export DATA_DIR=./data QDRANT_PATH=./data/qdrant_local PARENT_CHUNKS_DIR=./data/chunks
+python -m src.backend.backend
+
+# Терминал 2: Bot
+export DATA_DIR=./data BOT_TOKEN=your_token BACKEND_URL=http://localhost:5001
+python -m src.backend.bot
+```
+
+---
+
+## Пайплайн обработки PDF
+
+Полный пайплайн подготовки книг для RAG системы:
+
+```
+PDF книги → Парсинг TOC → Парсинг страниц → Чанкинг → Эмбеддинги → Qdrant
+```
 
 ### Структура данных
 
 ```
 data/
-├── books/           # PDF книги
-├── toc/             # JSON файлы с оглавлениями
-└── cache/           # Кэш распарсенных страниц
+├── books/                      # Исходные PDF книги
+├── toc/                        # JSON файлы с оглавлениями
+├── cache/                      # Кэш распарсенных страниц (LlamaParse)
+├── chunks/                     # Parent chunks (целые главы)
+├── child_chunks_with_embeddings/  # Child chunks с эмбеддингами
+└── qdrant_local/               # Векторная база данных
 ```
 
-### 1. Парсинг оглавления
+### Шаг 1: Парсинг оглавления
 
 Скрипт `scripts/parse_toc.py` преобразует текстовое оглавление в структурированный JSON с помощью Mistral LLM.
 
@@ -51,7 +117,7 @@ python scripts/parse_toc.py toc.txt > data/toc/book_name_toc.json
 }
 ```
 
-### 2. Парсинг и чанкинг книг
+### Шаг 2: Парсинг и чанкинг книг
 
 ```python
 from src.data import process_book, ChunkConfig
@@ -70,7 +136,64 @@ child_docs, parent_docs = process_book(
 )
 ```
 
-### 3. Parent Document Retriever
+### Шаг 3: Сохранение чанков
+
+```bash
+# Сохраняет parent и child chunks в JSON файлы
+python scripts/save_chunks.py
+```
+
+Результат:
+- `data/chunks/` — parent chunks (целые главы)
+- Готовые child chunks для следующего шага
+
+### Шаг 4: Вычисление эмбеддингов
+
+```bash
+# Вычисляет эмбеддинги для child chunks через Yandex Cloud
+python scripts/compute_embeddings.py
+```
+
+Результат: `data/child_chunks_with_embeddings/` — JSON файлы с векторами
+
+### Шаг 5: Загрузка в Qdrant
+
+```bash
+# Загружает child chunks с эмбеддингами в векторную БД
+python scripts/load_to_qdrant.py
+```
+
+Результат: `data/qdrant_local/` — готовая векторная база
+
+### Batch обработка всех книг
+
+```python
+from src.data import process_books_directory
+
+child_docs, parent_docs = process_books_directory(
+    "data/books",
+    config=config,
+    parsed_cache_dir="data/cache",
+    toc_dir="data/toc"
+)
+```
+
+### Полный пайплайн одной командой
+
+```bash
+# 1. Парсинг и чанкинг
+python scripts/save_chunks.py
+
+# 2. Эмбеддинги
+python scripts/compute_embeddings.py
+
+# 3. Загрузка в Qdrant
+python scripts/load_to_qdrant.py
+```
+
+---
+
+## Parent Document Retriever
 
 Пайплайн реализует стратегию Parent Document Retriever:
 
@@ -94,15 +217,31 @@ child_docs, parent_docs = process_book(
 }
 ```
 
-### Batch обработка всех книг
+---
 
-```python
-from src.data import process_books_directory
+## Скрипты
 
-child_docs, parent_docs = process_books_directory(
-    "data/books",
-    config=config,
-    parsed_cache_dir="data/cache",
-    toc_dir="data/toc"
-)
-```
+| Скрипт | Описание |
+|--------|----------|
+| `scripts/parse_toc.py` | Парсинг оглавления через Mistral |
+| `scripts/save_chunks.py` | Сохранение parent/child chunks |
+| `scripts/compute_embeddings.py` | Вычисление эмбеддингов (YC) |
+| `scripts/load_to_qdrant.py` | Загрузка в векторную БД |
+| `scripts/search.py` | Тестовый поиск по базе |
+| `scripts/check_essay.py` | Проверка эссе (CLI) |
+| `scripts/check_nir.py` | Проверка НИР (CLI) |
+| `scripts/evaluate_rag.py` | Оценка качества RAG |
+
+---
+
+## Переменные окружения
+
+| Переменная | Описание | По умолчанию |
+|------------|----------|--------------|
+| `BOT_TOKEN` | Telegram Bot Token | — |
+| `YC_API_KEY` | Yandex Cloud API Key | — |
+| `YC_FOLDER_ID` | Yandex Cloud Folder ID | — |
+| `BACKEND_URL` | URL backend сервера | `http://localhost:5001` |
+| `DATA_DIR` | Директория данных | `./data` |
+| `QDRANT_PATH` | Путь к Qdrant | `./data/qdrant_local` |
+| `PARENT_CHUNKS_DIR` | Путь к parent chunks | `./data/chunks` |
