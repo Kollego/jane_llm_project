@@ -3,7 +3,6 @@ version: '3.8'
 services:
   backend:
     build: .
-    container_name: jane_backend
     command: python -m src.backend.backend
     ports:
       - "5001:5001"
@@ -15,16 +14,18 @@ services:
       - YC_FOLDER_ID=${YC_FOLDER_ID}
     volumes:
       - ./data:/app/data
+    networks:
+      - jane_network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5001/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 10s
 
   bot:
     build: .
-    container_name: jane_bot
     command: python -m src.backend.bot
     environment:
       - DATA_DIR=/app/data
@@ -34,7 +35,13 @@ services:
       - YC_FOLDER_ID=${YC_FOLDER_ID}
     volumes:
       - ./data:/app/data
+    networks:
+      - jane_network
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
 
+networks:
+  jane_network:
+    driver: bridge
