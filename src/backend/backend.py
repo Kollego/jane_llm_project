@@ -500,12 +500,6 @@ def save_feedback():
     return jsonify({'status': 'success'})
 
 
-@app.route('/health', methods=['GET'])
-def health_check():
-    """Проверка статуса работы сервиса."""
-    return jsonify({'status': 'healthy'})
-
-
 if __name__ == '__main__':
     os.makedirs(UPLOADS_DIR, exist_ok=True)
     os.makedirs(FEEDBACK_DIR, exist_ok=True)

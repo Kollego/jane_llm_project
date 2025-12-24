@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   backend:
     build: .
@@ -37,6 +35,8 @@ services:
       - ./data:/app/data
     networks:
       - jane_network
+    links:
+      - backend
     depends_on:
       backend:
         condition: service_healthy
