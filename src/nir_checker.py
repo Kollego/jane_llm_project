@@ -1,5 +1,5 @@
 from typing import List, Dict, Any, Tuple
-from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
 from .base_rag import BaseRAGChecker
 
 
@@ -31,6 +31,7 @@ DEFAULT_SYSTEM_PROMPT = """
 
 Обращайся к студенту на "вы". Не называй его по имени.
 Выделение жирным: **текст** (без пробелов между звездочками и текстом)
+Не используй таблицы в ответе.
 """.strip()
 
 

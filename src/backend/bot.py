@@ -51,6 +51,9 @@ BTN_CANCEL = '❌ Отменить'
 BTN_SKIP = 'Пропустить'
 BTN_BACK = '◀️ Назад'
 
+# Лимит вопросов в диалоговой сессии
+MAX_DIALOG_QUESTIONS = 3
+
 # Пути к данным
 DATA_DIR = os.getenv('DATA_DIR', './data')
 USAGE_DIR = os.path.join(DATA_DIR, "usage")
@@ -512,7 +515,7 @@ async def handle_nir_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     reply_markup=reply_markup
                 )
             
-            # Начинаем диалоговую сессию
+            # Начинаем диалоговую сессию с сохранением начального ответа в историю
             try:
                 dialog_resp = requests.post(
                     f"{BACKEND_URL}/dialog/start",
@@ -521,6 +524,7 @@ async def handle_nir_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                         'user_id': str(user_id),
                         'work_type': 'nir',
                         'user_query': text,
+                        'initial_response': recommendation,  # Сохраняем начальный ответ в историю
                     },
                     timeout=60
                 )
@@ -528,6 +532,7 @@ async def handle_nir_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 if dialog_resp.status_code == 200:
                     session_data = dialog_resp.json()
                     context.user_data['session_id'] = session_data.get('session_id')
+                    context.user_data['dialog_questions_count'] = 0  # Счётчик вопросов
                     logger.info(f"Dialog session created: {session_data.get('session_id')}")
             except Exception as e:
                 logger.warning(f"Failed to start dialog session: {e}")
@@ -570,6 +575,7 @@ async def handle_dialog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             except:
                 pass
             context.user_data.pop('session_id', None)
+        context.user_data.pop('dialog_questions_count', None)
 
         keyboard = get_main_menu_keyboard()
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -596,6 +602,30 @@ async def handle_dialog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             )
             return MAIN_MENU
 
+        # Проверяем лимит вопросов
+        questions_count = context.user_data.get('dialog_questions_count', 0)
+        if questions_count >= MAX_DIALOG_QUESTIONS:
+            # Завершаем сессию
+            try:
+                requests.post(
+                    f"{BACKEND_URL}/dialog/end",
+                    json={'session_id': session_id},
+                    timeout=10
+                )
+            except:
+                pass
+            context.user_data.pop('session_id', None)
+            context.user_data.pop('dialog_questions_count', None)
+
+            keyboard = get_main_menu_keyboard()
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            await update.message.reply_text(
+                f"⚠️ Достигнут лимит: {MAX_DIALOG_QUESTIONS} вопроса в диалоге.\n\n"
+                "Диалог завершён. Вы можете загрузить работу заново для нового анализа.",
+                reply_markup=reply_markup
+            )
+            return MAIN_MENU
+
         try:
             await update.message.reply_text("⏳ Обрабатываю ваш вопрос...")
             
@@ -612,23 +642,61 @@ async def handle_dialog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                 answer = response.json().get('response', '')
                 answer_html = md_bold_to_html(answer)
                 
-                keyboard = get_dialog_keyboard()
-                reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+                # Увеличиваем счётчик вопросов
+                context.user_data['dialog_questions_count'] = questions_count + 1
+                remaining = MAX_DIALOG_QUESTIONS - questions_count - 1
                 
-                parts = split_text_for_telegram(answer_html, max_len=4096)
-                if parts:
-                    for part in parts[:-1]:
-                        await update.message.reply_text(part, parse_mode=ParseMode.HTML)
-                    await update.message.reply_text(
-                        parts[-1],
-                        reply_markup=reply_markup,
-                        parse_mode=ParseMode.HTML
-                    )
+                # Проверяем, остались ли ещё вопросы
+                if remaining <= 0:
+                    # Это был последний вопрос — завершаем сессию
+                    try:
+                        requests.post(
+                            f"{BACKEND_URL}/dialog/end",
+                            json={'session_id': session_id},
+                            timeout=10
+                        )
+                    except:
+                        pass
+                    context.user_data.pop('session_id', None)
+                    context.user_data.pop('dialog_questions_count', None)
+                    
+                    keyboard = get_main_menu_keyboard()
+                    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+                    
+                    parts = split_text_for_telegram(answer_html, max_len=4096)
+                    if parts:
+                        for part in parts[:-1]:
+                            await update.message.reply_text(part, parse_mode=ParseMode.HTML)
+                        await update.message.reply_text(
+                            parts[-1] + f"\n\n✅ Лимит вопросов ({MAX_DIALOG_QUESTIONS}) исчерпан. Диалог завершён.",
+                            reply_markup=reply_markup,
+                            parse_mode=ParseMode.HTML
+                        )
+                    else:
+                        await update.message.reply_text(
+                            f"✅ Лимит вопросов ({MAX_DIALOG_QUESTIONS}) исчерпан. Диалог завершён.",
+                            reply_markup=reply_markup
+                        )
+                    return MAIN_MENU
                 else:
-                    await update.message.reply_text(
-                        "Я не смог сформулировать ответ. Попробуйте переформулировать вопрос.",
-                        reply_markup=reply_markup
-                    )
+                    keyboard = get_dialog_keyboard()
+                    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+                    
+                    parts = split_text_for_telegram(answer_html, max_len=4096)
+                    if parts:
+                        for part in parts[:-1]:
+                            await update.message.reply_text(part, parse_mode=ParseMode.HTML)
+                        await update.message.reply_text(
+                            parts[-1] + f"\n\n<i>Осталось вопросов: {remaining}</i>",
+                            reply_markup=reply_markup,
+                            parse_mode=ParseMode.HTML
+                        )
+                    else:
+                        await update.message.reply_text(
+                            f"Я не смог сформулировать ответ. Попробуйте переформулировать вопрос.\n\n<i>Осталось вопросов: {remaining}</i>",
+                            reply_markup=reply_markup,
+                            parse_mode=ParseMode.HTML
+                        )
             else:
                 keyboard = get_dialog_keyboard()
                 reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -742,6 +810,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop('nir_file_name', None)
     context.user_data.pop('nir_file_ready', None)
     context.user_data.pop('user_query', None)
+    context.user_data.pop('dialog_questions_count', None)
 
     keyboard = get_main_menu_keyboard()
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)

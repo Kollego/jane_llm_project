@@ -7,6 +7,10 @@ langchain-text-splitters>=0.0.1
 openai~=2.9.0
 mistralai>=1.0.0
 
+# RAG Evaluation
+ragas>=0.4.0
+langchain-mistralai>=1.0.0
+
 # Vector store
 qdrant-client>=1.6.9
 

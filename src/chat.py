@@ -32,15 +32,31 @@ class RAGChatSession:
         assignment_text: str,
         work_text: str,
         top_k: int = 5,
+        initial_query: str = "",
+        initial_response: str = "",
     ):
         """
         Инициализация сессии диалога.
+        
+        Args:
+            checker: RAG checker для генерации ответов
+            assignment_text: Задание (для эссе) или контекст
+            work_text: Текст работы студента
+            top_k: Количество источников для поиска
+            initial_query: Начальный запрос пользователя (добавляется в историю)
+            initial_response: Начальный ответ системы (добавляется в историю)
         """
         self.checker = checker
         self.assignment_text = assignment_text
         self.work_text = work_text
         self.top_k = top_k
         self.history: List[Dict[str, str]] = []
+        
+        # Добавляем начальный диалог в историю, если есть
+        if initial_query:
+            self.history.append({"role": "user", "content": initial_query})
+        if initial_response:
+            self.history.append({"role": "assistant", "content": initial_response})
         
         # Кешируем источники при инициализации
         self._cached_chunks = None
@@ -112,20 +128,25 @@ class RAGChatSession:
                 "content": context_message
             })
         else:
-            # Последующие вопросы - краткий контекст + история
-            # Добавляем краткое напоминание о контексте
-            llm_messages.append({
-                "role": "user",
-                "content": (
-                    "Контекст: Ты анализируешь НИР студента. "
-                    "Предыдущий диалог ниже. Отвечай на новый вопрос."
-                )
-            })
-            
-            # Добавляем предыдущие сообщения (ограничиваем историю)
+            # Последующие вопросы - история + новый вопрос
+            # Берём предыдущие сообщения (ограничиваем историю)
             recent_history = self.history[-6:]  # Последние 3 пары вопрос-ответ
+            
+            # Первое сообщение user должно содержать контекст
+            first_user_added = False
             for msg in recent_history[:-1]:  # Без текущего вопроса
-                llm_messages.append(msg)
+                if msg["role"] == "user" and not first_user_added:
+                    # Добавляем контекст к первому user сообщению
+                    llm_messages.append({
+                        "role": "user",
+                        "content": (
+                            "Контекст: Ты анализируешь НИР студента. "
+                            f"Отвечай на вопросы по работе.\n\n{msg['content']}"
+                        )
+                    })
+                    first_user_added = True
+                else:
+                    llm_messages.append(msg)
             
             # Добавляем текущий вопрос
             llm_messages.append({

@@ -1,4 +1,4 @@
-from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
 from .base_rag import BaseRAGChecker
 
 
@@ -22,6 +22,7 @@ DEFAULT_SYSTEM_PROMPT = """
 Не называй автора работы по имени или фамилии. Не используй обращения по полу (юноша, девушка и т.д.). 
 Обращайся к автору работы (студенту) напрямую на вы (вы пишете, вы указали и т.д.)
 Выделение жирным делай через звездочки **текст** (без пробелов между звездочками и текстом)
+Не используй таблицы в ответе.
 """.strip()
 
 

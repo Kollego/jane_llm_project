@@ -322,6 +322,7 @@ def start_dialog():
     - work_type: "essay" или "nir"
     - work_text: текст работы (или file)
     - user_query: запрос пользователя (опционально)
+    - initial_response: начальный ответ системы (для сохранения в историю)
     """
     # Поддержка и JSON, и form-data
     if request.is_json:
@@ -330,12 +331,14 @@ def start_dialog():
         work_type = data.get('work_type', 'essay')
         work_text = data.get('work_text', '')
         user_query = data.get('user_query', '')
+        initial_response = data.get('initial_response', '')
         top_k = int(data.get('top_k', 5))
     else:
         user_id = request.form.get('user_id', 'unknown')
         work_type = request.form.get('work_type', 'essay')
         work_text = request.form.get('work_text', '')
         user_query = request.form.get('user_query', '')
+        initial_response = request.form.get('initial_response', '')
         top_k = int(request.form.get('top_k', 5))
 
     # Если текст передан через файл
@@ -371,19 +374,21 @@ def start_dialog():
         else:
             checker = RAGEssayChecker(retriever=retriever)
 
-        # Создаем сессию диалога
+        # Создаем сессию диалога с начальной историей
         session = RAGChatSession(
             checker=checker,
             assignment_text=assignment_text,
             work_text=work_text,
             top_k=top_k,
+            initial_query=user_query,
+            initial_response=initial_response,
         )
 
-        # Сохраняем сессию (без генерации начального ответа - он уже был отправлен)
+        # Сохраняем сессию
         session_id = f"{user_id}_{work_type}"
         _chat_sessions[session_id] = session
         
-        logger.info(f"Dialog session created: {session_id}")
+        logger.info(f"Dialog session created: {session_id}, history length: {len(session.history)}")
 
         return jsonify({
             'status': 'success',
